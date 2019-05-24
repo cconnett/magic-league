@@ -92,8 +92,8 @@ class SheetManager(object):
       previous_pairings |= set(zip(b, a))
 
     player_list = []
-    for vitals in zip(names, ids, scores, requested_matches):
+    for vitals in zip(ids, names, scores, requested_matches):
       name = vitals[0]
-      opponent_ids = list(set(b for (a, b) in previous_pairings if name == a))
+      opponent_ids = frozenset(b for (a, b) in previous_pairings if name == a)
       player_list.append(player_lib.Player(*(vitals + (opponent_ids,))))
     return player_list

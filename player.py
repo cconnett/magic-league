@@ -1,15 +1,15 @@
 # python3
 """Player datatype."""
 import fractions
-from typing import Collection, NamedTuple, Text
+from typing import NamedTuple, Set, Text
 
 Name = Text
 Username = Text
 
 
 class Player(NamedTuple):
-  name: Name
   id: Username
+  name: Name
   score: fractions.Fraction
   requested_matches: int
-  opponents: Collection[Username]
+  opponents: Set[Username]

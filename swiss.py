@@ -4,6 +4,7 @@
 from __future__ import print_function
 
 import argparse
+import collections
 import contextlib
 import fractions
 import itertools
@@ -12,9 +13,8 @@ import random
 import sys
 from typing import List, Optional, Tuple
 
-import elkai
-
 import blitzstein_diaconis
+import networkx
 import player as player_lib
 import sheet_manager
 
@@ -81,17 +81,19 @@ def PrintPairings(pairings, lcm, stream=sys.stdout):
     print(f'Total loss over LCM²: {final_loss} / {lcm**2}')
     rmse = math.sqrt(final_loss / lcm**2 / len(pairings))
     print(f'Root Mean Squared Error (per match): {rmse:.4f}')
+  return final_loss
 
 
 Pairings = List[Tuple[player_lib.Player, player_lib.Player]]
 
-BYE = player_lib.Player('BYE', 'noreply', fractions.Fraction(0), 0, [])
+BYE = player_lib.Player('noreply', 'BYE', fractions.Fraction(0), 0, frozenset())
 
 
 class Pairer(object):
   """Manages pairing a cycle of a league."""
 
   def __init__(self, players: List[player_lib.Player]):
+    players = [p for p in players if p.requested_matches > 0]
     self.players = players
     self.players_by_id = {player.id: player for player in players}
     self.bye = None
@@ -104,7 +106,8 @@ class Pairer(object):
           p for p in self.players if p.requested_matches == 3
           if BYE not in p.opponents
       ]
-      bye = min(eligible_players, key=lambda p: (p.score, random.random()))
+      # bye = min(eligible_players, key=lambda p: (p.score, random.random()))
+      bye = self.players_by_id['sebh']
       self.players.remove(bye)
       self.bye = bye._replace(requested_matches=bye.requested_matches - 1)
       self.players.append(self.bye)
@@ -130,58 +133,54 @@ class Pairer(object):
       print('Random pairings')
       return self.RandomPairings()
 
-    # Ensure NoRepeatMatches( self.previous_pairings, self.reverse_players)
-    # Define Metric MismatchSum(slots, self.scores)
-    # Ensure Requested Matches self.requested_matches, self.reverse_players
     for d in set(p.score.denominator for p in self.players):
       self.lcm = Lcm(self.lcm, d)
 
-    odd_players = list(p for p in self.players if Odd(p.requested_matches))
-    random.shuffle(odd_players)
-    assert Even(len(odd_players))
-    counter = itertools.count()
-    tsp_nodes = {}
+    graph = networkx.Graph()
     for p in self.players:
-      for _ in range(p.requested_matches // 2):
-        tsp_nodes[next(counter)] = (p, p)
-    num_odd_players = len(odd_players)
-    # for (a, b) in zip(odd_players[:num_odd_players // 2],
-    #                   odd_players[num_odd_players // 2:]):
-    for a in odd_players:
-      tsp_nodes[next(counter)] = (a, None)
-      tsp_nodes[next(counter)] = (None, a)
-
-    weights = []  # type: List[List[int]]
-    for (player_z, player_a) in tsp_nodes.values():
-      row = []
-      weights.append(row)
-      for (player_b, player_c) in tsp_nodes.values():
-        if player_a == player_b or player_z == player_c:
-          row.append(EFFECTIVE_INFINITY)
-        elif player_a is not None and player_b is not None:
-          row.append((int(player_a.score * self.lcm) -
-                      int(player_b.score * self.lcm))**2)
-        elif player_a is None and player_b is None:
-          row.append(0)
-        else:
-          # Dense node meets singleton on the wrong side.
-          row.append(EFFECTIVE_INFINITY)
-    tour = elkai.solve_int_matrix(weights)
-    pairings = []
-    for out, in_ in zip(tour, tour[1:]):
-      a = tsp_nodes[out][1]
-      b = tsp_nodes[in_][0]
-      if a and b:
-        pairings.append((a, b))
-      ex = a.id if a else None
-      en = b.id if b else None
-      print(f'{ex}→{en}')
-    if self.bye:
-      pairings.append((self.bye, BYE))
+      p_nodes = [p.id + f'_{i}' for i in range(1, p.requested_matches + 1)]
+      for node in p_nodes:
+        graph.add_node(node)
+    for p in self.players:
+      for q in self.players:
+        if p < q and q.id not in p.opponents:
+          p_nodes = [p.id + f'_{i}' for i in range(1, p.requested_matches + 1)]
+          for u, v in itertools.product(p_nodes, [f'{q.id}_1']):
+            graph.add_edge(
+                u,
+                v,
+                weight=-(int(p.score * self.lcm) - int(q.score * self.lcm))**2)
+    while True:
+      print(graph.size())
+      matching = networkx.max_weight_matching(graph, maxcardinality=True)
+      pairings = []
+      bag = collections.Counter()
+      for match in matching:
+        canonical_form = tuple(
+            sorted([
+                match[0].rsplit('_', maxsplit=1)[0],
+                match[1].rsplit('_', maxsplit=1)[0],
+            ]))
+        pairings.append(canonical_form)
+        bag.update([canonical_form])
+      print(bag.most_common(1))
+      if bag.most_common(1)[0][1] == 1:
+        break
+      for match, multiplicity in bag.most_common(1):
+        pid, qid = match
+        for (p_node, q_node) in matching:
+          if p_node.startswith(pid) and q_node.startswith(qid):
+            graph.remove_edge(p_node, q_node)
+            multiplicity -= 1
+            if multiplicity == 1:
+              break
     n = sum(p.requested_matches for p in self.players) // 2
     print(
         f'I have {len(pairings)} matches. I should have {n} (not counting BYE).'
     )
+    pairings = [(self.players_by_id[pid], self.players_by_id[qid])
+                for (pid, qid) in pairings]
+    pairings.append((self.bye, BYE))
     return pairings
 
 
@@ -190,8 +189,10 @@ def Main():
   sheet = sheet_manager.SheetManager(FLAGS.set_code, FLAGS.cycle)
   pairer = Pairer(sheet.GetPlayers())
   pairer.GiveBye()
-  pairings = pairer.Search(random_pairings=FLAGS.cycle in (1,))
-  PrintPairings(pairings, pairer.lcm)
+  loss = 91238409
+  while loss > 145:
+    pairings = pairer.Search(random_pairings=FLAGS.cycle in (1,))
+    loss = PrintPairings(pairings, pairer.lcm)
   with open(f'pairings-{FLAGS.set_code}{FLAGS.cycle}.txt', 'w') as output:
     PrintPairings(pairings, pairer.lcm, stream=output)
 
