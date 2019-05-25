@@ -128,7 +128,7 @@ class Pairer(object):
     return pairings
 
   def Search(self, random_pairings=False) -> Pairings:
-    """Constructs an SMT problem for pairings and optimizes it."""
+    """Creates optimal pairings using maximum weight matching."""
     if random_pairings:
       print('Random pairings')
       return self.RandomPairings()
@@ -136,44 +136,28 @@ class Pairer(object):
     for d in set(p.score.denominator for p in self.players):
       self.lcm = Lcm(self.lcm, d)
 
-    graph = networkx.Graph()
-    for p in self.players:
-      p_nodes = [p.id + f'_{i}' for i in range(1, p.requested_matches + 1)]
-      for node in p_nodes:
-        graph.add_node(node)
-    for p in self.players:
-      for q in self.players:
-        if p < q and q.id not in p.opponents:
-          p_nodes = [p.id + f'_{i}' for i in range(1, p.requested_matches + 1)]
-          for u, v in itertools.product(p_nodes, [f'{q.id}_1']):
-            graph.add_edge(
-                u,
-                v,
-                weight=-(int(p.score * self.lcm) - int(q.score * self.lcm))**2)
-    while True:
-      print(graph.size())
+    pairings = set()
+    requests = collections.Counter(
+        {p.id: p.requested_matches for p in self.players})
+    while requests:
+      print(len(list(requests.elements())))
+      graph = networkx.Graph()
+      for p in requests:
+        graph.add_node(p)
+      for p in requests:
+        for q in requests:
+          if (p < q and q not in self.players_by_id[p].opponents and
+              (p, q) not in pairings and (q, p) not in pairings):
+            p_score = self.players_by_id[p].score
+            q_score = self.players_by_id[q].score
+            mismatch = (int(p_score * self.lcm) - int(q_score * self.lcm))**2
+            # Players requesting more matches need to be paired first.
+            bonus = max(requests[p], requests[q])
+            graph.add_edge(p, q, weight=bonus - mismatch)
       matching = networkx.max_weight_matching(graph, maxcardinality=True)
-      pairings = []
-      bag = collections.Counter()
-      for match in matching:
-        canonical_form = tuple(
-            sorted([
-                match[0].rsplit('_', maxsplit=1)[0],
-                match[1].rsplit('_', maxsplit=1)[0],
-            ]))
-        pairings.append(canonical_form)
-        bag.update([canonical_form])
-      print(bag.most_common(1))
-      if bag.most_common(1)[0][1] == 1:
-        break
-      for match, multiplicity in bag.most_common(1):
-        pid, qid = match
-        for (p_node, q_node) in matching:
-          if p_node.startswith(pid) and q_node.startswith(qid):
-            graph.remove_edge(p_node, q_node)
-            multiplicity -= 1
-            if multiplicity == 1:
-              break
+      pairings.update(matching)
+      paired_players = [id for id in itertools.chain.from_iterable(matching)]
+      requests = +(requests - collections.Counter(paired_players))
     n = sum(p.requested_matches for p in self.players) // 2
     print(
         f'I have {len(pairings)} matches. I should have {n} (not counting BYE).'
@@ -189,10 +173,8 @@ def Main():
   sheet = sheet_manager.SheetManager(FLAGS.set_code, FLAGS.cycle)
   pairer = Pairer(sheet.GetPlayers())
   pairer.GiveBye()
-  loss = 91238409
-  while loss > 145:
-    pairings = pairer.Search(random_pairings=FLAGS.cycle in (1,))
-    loss = PrintPairings(pairings, pairer.lcm)
+  pairings = pairer.Search(random_pairings=FLAGS.cycle in (1,))
+  PrintPairings(pairings, pairer.lcm)
   with open(f'pairings-{FLAGS.set_code}{FLAGS.cycle}.txt', 'w') as output:
     PrintPairings(pairings, pairer.lcm, stream=output)
 
