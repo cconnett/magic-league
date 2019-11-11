@@ -68,7 +68,7 @@ class SheetManager(object):
       age = datetime.datetime.now() - mtime
       if age < datetime.timedelta(minutes=20) and not flags.FLAGS.fetch:
         player_list = pickle.load(open(filename, 'rb'))
-        print('Loaded previous results from cache')
+        # print('Loaded previous results from cache')
         return player_list
     except (IOError, EOFError, FileNotFoundError):
       pass
@@ -88,7 +88,7 @@ class SheetManager(object):
         int(s) for s in standings.col_values(10 + self.cycle - 1)[1:]
     ]
     scores = [
-        fractions.Fraction(w, (w + l))if w + l else fractions.Fraction(1, 2)
+        fractions.Fraction(w, (w + l)) if w + l else fractions.Fraction(1, 2)
         for w, l in zip(wins, losses)
     ]
 

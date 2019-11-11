@@ -2,7 +2,6 @@
 """Solver for swiss pairings."""
 
 import collections
-import concurrent.futures
 import contextlib
 import difflib
 import enum
@@ -11,10 +10,8 @@ import itertools
 import math
 import multiprocessing
 import os
-import queue
 import random
 import sys
-import threading
 import time
 
 from typing import List, Optional, Tuple
@@ -119,16 +116,15 @@ def PrintPairings(pairings, stream=sys.stdout):
 
 
 class NodeType(enum.Enum):
-  SINGLE = 1
-  DOUBLE = 2
-  HUB = 3
+  REQUESTED_MATCH = 1
+  MATCHUP = 2
 
 
 class Pairer(object):
   """Manages pairing a cycle of a league."""
 
   def __init__(self, players: List[player_lib.Player]):
-    self.players = players
+    self.players = [p for p in players if p.requested_matches > 0]
     self.players_by_id = {player.id: player for player in players}
     self.byed_player = None
     self.lcm = 1
@@ -172,7 +168,7 @@ class Pairer(object):
       print('Random pairings')
       pairings = self.RandomPairings()
     else:
-      print('Optimizing pairings')
+      # print('Optimizing pairings')
       pairings = self.TravellingSalesPairings()
     ValidatePairings(pairings, n=self.correct_num_matches)
     if self.byed_player:
@@ -197,109 +193,66 @@ class Pairer(object):
     random.shuffle(odd_players)
     assert Even(len(odd_players))
 
-    counter = itertools.count()
-    tsp_nodes = {}
-    for p in self.players:
-      for _ in range(p.requested_matches // 2):
-        tsp_nodes[next(counter)] = (p, NodeType.DOUBLE)
-    for p in odd_players:
-      tsp_nodes[next(counter)] = (p, NodeType.SINGLE)
-      tsp_nodes[next(counter)] = (p, NodeType.HUB)
-
-    n = len(tsp_nodes)
-    weights = np.zeros((n, n), dtype=int)
     my_lcm = min(MAX_LCM, self.lcm)
+    counter = itertools.count()
+    requested_match_nodes = {}
+    matchup_nodes = {}
+    for p in self.players:
+      for z in range(p.requested_matches):
+        requested_match_nodes[(p, z)] = next(counter)
+    for p in self.players:
+      for q in self.players:
+        if p >= q:
+          continue
+        if p.id in q.opponents or q.id in p.opponents:
+          continue
+        if abs(p.score - q.score) > 0.5:
+          continue
+        matchup_nodes.setdefault(p, {})[q] = next(counter)
+    n = len(requested_match_nodes) + sum(len(x) for x in matchup_nodes.values())
+    weights = np.full((n, n), EFFECTIVE_INFINITY, dtype=int)
+    try:
+      for (p, z) in requested_match_nodes:
+        if p not in matchup_nodes:
+          # The last player alphabetically won't have an entry in matchup_nodes.
+          continue
+        for q in matchup_nodes[p]:
+          edge = (requested_match_nodes[(p, z)], matchup_nodes[p][q])
+          weights[edge] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
+          weights[edge[1],
+                  edge[0]] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
+          weights[matchup_nodes[p][q], requested_match_nodes[(q, 0)]] = 0
+          if (q, 1) in requested_match_nodes:
+            weights[matchup_nodes[p][q], requested_match_nodes[(q, 1)]] = 0
+          if (q, 2) in requested_match_nodes:
+            weights[matchup_nodes[p][q], requested_match_nodes[(q, 2)]] = 0
+      for ma in requested_match_nodes.values():
+        for mb in requested_match_nodes.values():
+          weights[ma, mb] = my_lcm**2
+          weights[mb, ma] = my_lcm**2
+    except:
+      import pdb
+      pdb.post_mortem()
+      raise
+    pairings = []
+    # tour = elkai.solve_int_matrix(weights)
+    print('NAME: Pairings')
+    print('TYPE: TSP')
+    print('EDGE_WEIGHT_TYPE: EXPLICIT')
+    print('EDGE_WEIGHT_FORMAT: FULL_MATRIX')
+    print(f'DIMENSION: {n}')
+    print('EDGE_WEIGHT_SECTION')
+    print(n)
     for i in range(n):
       for j in range(n):
-        p, ptype = tsp_nodes[i]
-        q, qtype = tsp_nodes[j]
-        if (ptype, qtype) in (
-            (NodeType.DOUBLE, NodeType.DOUBLE),
-            (NodeType.SINGLE, NodeType.SINGLE),
-            (NodeType.SINGLE, NodeType.DOUBLE),
-            (NodeType.DOUBLE, NodeType.SINGLE),
-        ):
-          if p == q or p.id in q.opponents or q.id in p.opponents:
-            weights[i, j] = EFFECTIVE_INFINITY
-          else:
-            weights[i, j] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
-        elif (ptype, qtype) in ((NodeType.HUB, NodeType.SINGLE),
-                                (NodeType.SINGLE, NodeType.HUB)):
-          if p == q:
-            weights[i, j] = 0
-          else:
-            weights[i, j] = EFFECTIVE_INFINITY
-        elif (ptype, qtype) in ((NodeType.HUB, NodeType.DOUBLE),
-                                (NodeType.DOUBLE, NodeType.HUB)):
-          weights[i, j] = EFFECTIVE_INFINITY
-        elif (ptype, qtype) == (NodeType.HUB, NodeType.HUB):
-          weights[i, j] = (HUB_COST * my_lcm)**2
-        else:
-          assert False, f'{p.id} {ptype} -- {q.id} {qtype}'
+        print(f'{weights[i,j]:<6d}', end=' ')
+      print()
 
-    pairings = []
-    pri_q = queue.PriorityQueue()
-    semaphore = threading.BoundedSemaphore(MAX_PROCESSES)
-
-    def AfterSolve(future):
-      w, tour = future.result()
-      semaphore.release()
-      for s in TourSuccessors(tour, tsp_nodes):
-        try:
-          pri_q.put(s + (w,))
-        except ValueError:
-          pass
-
-    tour = elkai.solve_int_matrix(weights)
-    for s in TourSuccessors(tour, tsp_nodes):
-      pri_q.put(s + (weights,))
-    spinner = itertools.cycle(['/', '—', '\\', '|'])
-    with concurrent.futures.ProcessPoolExecutor(MAX_PROCESSES) as pool:
-      while True:
-        try:
-          num_dupes, edge_to_remove, pairings, weights = pri_q.get()
-        except ValueError:
-          continue
-        print(f'\033[A\033[KEliminating {num_dupes} duplicate pairings... '
-              f'{next(spinner)}')
-        if not edge_to_remove:
-          pool.shutdown(wait=False)
-          return pairings
-        out, in_ = edge_to_remove
-        weights = weights.copy()
-        weights[out, in_] = EFFECTIVE_INFINITY
-        weights[in_, out] = EFFECTIVE_INFINITY
-        semaphore.acquire()
-        future = pool.submit(SolveWeights, weights)
-        future.add_done_callback(AfterSolve)
-
-
-def TourSuccessors(tour: List[int], tsp_nodes):
-  """Yield pairings and nominate one dupe-match edge to be removed."""
-  pairings = []
-  edges_to_remove = []
-  for out, in_ in zip(tour, tour[1:] + [tour[0]]):
-    p, ptype = tsp_nodes[out]
-    q, qtype = tsp_nodes[in_]
-    if (ptype, qtype) in (
-        (NodeType.DOUBLE, NodeType.DOUBLE),
-        (NodeType.SINGLE, NodeType.SINGLE),
-        (NodeType.SINGLE, NodeType.DOUBLE),
-        (NodeType.DOUBLE, NodeType.SINGLE),
-    ):
-      if (p, q) in pairings or (q, p) in pairings:
-        edges_to_remove.append((out, in_))
-      else:
-        pairings.append((p, q))
-  if not edges_to_remove:
-    yield (0, None, pairings)
-  else:
-    for edge in edges_to_remove:
-      yield (len(edges_to_remove), edge, pairings)
-
-
-def SolveWeights(weights):
-  return weights, elkai.solve_int_matrix(weights)
+    reverse_nodes = {n: (p, q) for ((p, q), n) in matchup_nodes.items()}
+    for a, b in zip(tour, tour[1:]):
+      if a in requested_match_nodes.values() and b in matchup_nodes.values():
+        pairings.append(reverse_nodes[a])
+    return pairings
 
 
 def OrderPairingsByTsp(pairings: Pairings) -> Pairings:
