@@ -220,9 +220,7 @@ class Pairer(object):
           continue
         for q in matchup_nodes[p]:
           edge = (requested_match_nodes[(p, z)], matchup_nodes[p][q])
-          weights[edge] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
-          weights[edge[1], edge[0]] = (int(p.score * my_lcm) -
-                                       int(q.score * my_lcm))**2
+          weights[edge] = weights[edge[1], edge[0]] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
           weights[matchup_nodes[p][q], requested_match_nodes[(q, 0)]] = 0
           if (q, 1) in requested_match_nodes:
             weights[matchup_nodes[p][q], requested_match_nodes[(q, 1)]] = 0
@@ -240,26 +238,33 @@ class Pairer(object):
     # tour = elkai.solve_int_matrix(weights)
     print('NAME: Pairings')
     print('TYPE: TSP')
+    print(f'DIMENSION: {n}')
     print('EDGE_WEIGHT_TYPE: EXPLICIT')
     print('EDGE_WEIGHT_FORMAT: FULL_MATRIX')
-    print(f'DIMENSION: {n}')
-    print('EDGE_DATA_FORMAT: ADJLIST')
+    print('EDGE_DATA_FORMAT: ADJ_LIST')
     print('EDGE_DATA_SECTION')
+    print(n)
     for i in range(n):
       print(i + 1, end=' ')  # 1-indexed
-      for j in range(n):
-        if j != EFFECTIVE_INFINITY:
+      for j in range(i+1,n):
+        if weights[i][j] != EFFECTIVE_INFINITY:
           print(j + 1, end=' ')
       print('-1')
     print('-1')
     print('EDGE_WEIGHT_SECTION')
-    print(n)
     for i in range(n):
       for j in range(n):
+        if weights[i,j] == EFFECTIVE_INFINITY:
+          # We've already emitted the graph adjacency list omitting the
+          # infinities.
+          weights[i,j] = 0
         print(f'{weights[i,j]:<6d}', end=' ')
       print()
 
-    reverse_nodes = {n: (p, q) for ((p, q), n) in matchup_nodes.items()}
+    reverse_nodes = {}
+    for p in matchup_nodes:
+      for q in matchup_nodes[p]:
+        reverse_nodes[matchup_nodes[p][q]] = (p, q)
     for a, b in zip(tour, tour[1:]):
       if a in requested_match_nodes.values() and b in matchup_nodes.values():
         pairings.append(reverse_nodes[a])
