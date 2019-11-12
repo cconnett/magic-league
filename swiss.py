@@ -199,9 +199,11 @@ class Pairer(object):
     counter = itertools.count()
     requested_match_nodes = {}
     matchup_nodes = {}
+    drain_nodes = {}
     for p in self.players:
       for z in range(p.requested_matches):
         requested_match_nodes[(p, z)] = next(counter)
+        last_pz = (p, z)
     for p in self.players:
       for q in self.players:
         if p >= q:
@@ -211,6 +213,13 @@ class Pairer(object):
         if abs(p.score - q.score) > 0.5:
           continue
         matchup_nodes.setdefault(p, {})[q] = next(counter)
+        last_pair = (p, q)
+    p, q = last_pair
+    p_req, z = last_pz
+    matchup_nodes[p][q], requested_match_nodes[(
+        p_req, p_req.requested_matches -
+        1)] = (requested_match_nodes[(p_req, p_req.requested_matches - 1)],
+               matchup_nodes[p][q])
     n = len(requested_match_nodes) + sum(len(x) for x in matchup_nodes.values())
     weights = np.full((n, n), EFFECTIVE_INFINITY, dtype=int)
     try:
@@ -220,12 +229,13 @@ class Pairer(object):
           continue
         for q in matchup_nodes[p]:
           edge = (requested_match_nodes[(p, z)], matchup_nodes[p][q])
-          weights[edge] = weights[edge[1], edge[0]] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
-          weights[matchup_nodes[p][q], requested_match_nodes[(q, 0)]] = 0
+          weights[edge] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
+          weights[requested_match_nodes[(q, 0)], matchup_nodes[p][q]] = 0
           if (q, 1) in requested_match_nodes:
-            weights[matchup_nodes[p][q], requested_match_nodes[(q, 1)]] = 0
+            weights[requested_match_nodes[(q, 1)], matchup_nodes[p][q]] = 0
           if (q, 2) in requested_match_nodes:
-            weights[matchup_nodes[p][q], requested_match_nodes[(q, 2)]] = 0
+            weights[requested_match_nodes[(q, 2)], matchup_nodes[p][q]] = 0
+      # Fill in a fixed rate for transitions between requested_match nodes.
       for ma in requested_match_nodes.values():
         for mb in requested_match_nodes.values():
           weights[ma, mb] = my_lcm**2
@@ -240,26 +250,23 @@ class Pairer(object):
     print('TYPE: TSP')
     print(f'DIMENSION: {n}')
     print('EDGE_WEIGHT_TYPE: EXPLICIT')
-    print('EDGE_WEIGHT_FORMAT: FULL_MATRIX')
-    print('EDGE_DATA_FORMAT: ADJ_LIST')
+    print('EDGE_WEIGHT_FORMAT: UPPER_ROW')
+    print('EDGE_DATA_FORMAT: EDGE_LIST')
     print('EDGE_DATA_SECTION')
-    print(n)
     for i in range(n):
-      print(i + 1, end=' ')  # 1-indexed
-      for j in range(i+1,n):
+      for j in range(i + 1, n):
         if weights[i][j] != EFFECTIVE_INFINITY:
-          print(j + 1, end=' ')
-      print('-1')
+          print(f'{i+1} {j+1} {weights[i, j]}')
     print('-1')
-    print('EDGE_WEIGHT_SECTION')
-    for i in range(n):
-      for j in range(n):
-        if weights[i,j] == EFFECTIVE_INFINITY:
-          # We've already emitted the graph adjacency list omitting the
-          # infinities.
-          weights[i,j] = 0
-        print(f'{weights[i,j]:<6d}', end=' ')
-      print()
+    # print('EDGE_WEIGHT_SECTION')
+    # for i in range(n):
+    #   for j in range(i + 1, n):
+    #     if weights[i, j] == EFFECTIVE_INFINITY:
+    #       # We've already emitted the graph adjacency list omitting the
+    #       # infinities.
+    #       weights[i, j] = 0
+    #     print(f'{weights[i,j]:<6d}', end=' ')
+    #   print()
 
     reverse_nodes = {}
     for p in matchup_nodes:
