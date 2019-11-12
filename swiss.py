@@ -33,8 +33,10 @@ MAX_PROCESSES = multiprocessing.cpu_count()
 
 Pairings = List[Tuple[player_lib.Player, player_lib.Player]]
 
-flags.DEFINE_bool(
-    'write', False, 'Write the pairings to the spreadsheet', short_name='w')
+flags.DEFINE_bool('write',
+                  False,
+                  'Write the pairings to the spreadsheet',
+                  short_name='w')
 flags.DEFINE_bool(
     'fetch',
     False,
@@ -154,8 +156,8 @@ class Pairer(object):
           p for p in self.players if p.requested_matches == 3
           if BYE.id not in p.opponents
       ]
-      byed_player = min(
-          eligible_players, key=lambda p: (p.score, random.random()))
+      byed_player = min(eligible_players,
+                        key=lambda p: (p.score, random.random()))
       self.players.remove(byed_player)
       self.byed_player = byed_player._replace(
           requested_matches=byed_player.requested_matches - 1)
@@ -219,8 +221,8 @@ class Pairer(object):
         for q in matchup_nodes[p]:
           edge = (requested_match_nodes[(p, z)], matchup_nodes[p][q])
           weights[edge] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
-          weights[edge[1],
-                  edge[0]] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
+          weights[edge[1], edge[0]] = (int(p.score * my_lcm) -
+                                       int(q.score * my_lcm))**2
           weights[matchup_nodes[p][q], requested_match_nodes[(q, 0)]] = 0
           if (q, 1) in requested_match_nodes:
             weights[matchup_nodes[p][q], requested_match_nodes[(q, 1)]] = 0
@@ -241,6 +243,15 @@ class Pairer(object):
     print('EDGE_WEIGHT_TYPE: EXPLICIT')
     print('EDGE_WEIGHT_FORMAT: FULL_MATRIX')
     print(f'DIMENSION: {n}')
+    print('EDGE_DATA_FORMAT: ADJLIST')
+    print('EDGE_DATA_SECTION')
+    for i in range(n):
+      print(i + 1, end=' ')  # 1-indexed
+      for j in range(n):
+        if j != EFFECTIVE_INFINITY:
+          print(j + 1, end=' ')
+      print('-1')
+    print('-1')
     print('EDGE_WEIGHT_SECTION')
     print(n)
     for i in range(n):
@@ -295,10 +306,10 @@ def OrderPairingsByScore(pairings: Pairings) -> Pairings:
 
 
 def PairingTransitionCost(pairing_alpha, pairing_beta) -> float:
-  left_cost = 1 - difflib.SequenceMatcher(
-      a=pairing_alpha[0], b=pairing_beta[0]).ratio()
-  right_cost = 1 - difflib.SequenceMatcher(
-      a=pairing_alpha[1], b=pairing_beta[1]).ratio()
+  left_cost = 1 - difflib.SequenceMatcher(a=pairing_alpha[0],
+                                          b=pairing_beta[0]).ratio()
+  right_cost = 1 - difflib.SequenceMatcher(a=pairing_alpha[1],
+                                           b=pairing_beta[1]).ratio()
   return left_cost + right_cost
 
 
@@ -314,8 +325,8 @@ def Main(argv):
   pairings = pairer.MakePairings(random_pairings=cycle in (1,))
   pairings = OrderPairingsByTsp(pairings)
   PrintPairings(pairings)
-  ValidatePairings(
-      pairings, n=pairer.correct_num_matches + bool(pairer.byed_player))
+  ValidatePairings(pairings,
+                   n=pairer.correct_num_matches + bool(pairer.byed_player))
   t = time.time() - start
   try:
     os.mkdir('pairings')
