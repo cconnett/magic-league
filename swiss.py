@@ -33,10 +33,8 @@ MAX_PROCESSES = multiprocessing.cpu_count()
 
 Pairings = List[Tuple[player_lib.Player, player_lib.Player]]
 
-flags.DEFINE_bool('write',
-                  False,
-                  'Write the pairings to the spreadsheet',
-                  short_name='w')
+flags.DEFINE_bool(
+    'write', False, 'Write the pairings to the spreadsheet', short_name='w')
 flags.DEFINE_bool(
     'fetch',
     False,
@@ -156,8 +154,8 @@ class Pairer(object):
           p for p in self.players if p.requested_matches == 3
           if BYE.id not in p.opponents
       ]
-      byed_player = min(eligible_players,
-                        key=lambda p: (p.score, random.random()))
+      byed_player = min(
+          eligible_players, key=lambda p: (p.score, random.random()))
       self.players.remove(byed_player)
       self.byed_player = byed_player._replace(
           requested_matches=byed_player.requested_matches - 1)
@@ -197,13 +195,12 @@ class Pairer(object):
 
     my_lcm = min(MAX_LCM, self.lcm)
     counter = itertools.count()
+    depot = next(counter)
     requested_match_nodes = {}
     matchup_nodes = {}
-    drain_nodes = {}
     for p in self.players:
       for z in range(p.requested_matches):
         requested_match_nodes[(p, z)] = next(counter)
-        last_pz = (p, z)
     for p in self.players:
       for q in self.players:
         if p >= q:
@@ -213,14 +210,14 @@ class Pairer(object):
         if abs(p.score - q.score) > 0.5:
           continue
         matchup_nodes.setdefault(p, {})[q] = next(counter)
-        last_pair = (p, q)
-    p, q = last_pair
-    p_req, z = last_pz
-    matchup_nodes[p][q], requested_match_nodes[(
-        p_req, p_req.requested_matches -
-        1)] = (requested_match_nodes[(p_req, p_req.requested_matches - 1)],
-               matchup_nodes[p][q])
-    n = len(requested_match_nodes) + sum(len(x) for x in matchup_nodes.values())
+    # In the next step, we're going to draw the edges between requested matches
+    # and matchup nodes. They go only in the forward direction (from lower
+    # indexed players to higher ones). This means the RMs of the last player
+    # never go out to a matchup node. But that just means the path takes the
+    # penalty to go to the next player / sends another veh.
+    n = (
+        len(requested_match_nodes) +
+        sum(len(x) for x in matchup_nodes.values()) + 1)
     weights = np.full((n, n), EFFECTIVE_INFINITY, dtype=int)
     try:
       for (p, z) in requested_match_nodes:
@@ -229,17 +226,23 @@ class Pairer(object):
           continue
         for q in matchup_nodes[p]:
           edge = (requested_match_nodes[(p, z)], matchup_nodes[p][q])
+          # The edge from player 1 to matchup node is the cost.
           weights[edge] = (int(p.score * my_lcm) - int(q.score * my_lcm))**2
-          weights[requested_match_nodes[(q, 0)], matchup_nodes[p][q]] = 0
+          # The edge from matchup node to player 2 is the 0.
+          weights[matchup_nodes[p][q], requested_match_nodes[(q, 0)]] = 0
           if (q, 1) in requested_match_nodes:
-            weights[requested_match_nodes[(q, 1)], matchup_nodes[p][q]] = 0
+            weights[matchup_nodes[p][q], requested_match_nodes[(q, 1)]] = 0
           if (q, 2) in requested_match_nodes:
-            weights[requested_match_nodes[(q, 2)], matchup_nodes[p][q]] = 0
-      # Fill in a fixed rate for transitions between requested_match nodes.
-      for ma in requested_match_nodes.values():
-        for mb in requested_match_nodes.values():
-          weights[ma, mb] = my_lcm**2
-          weights[mb, ma] = my_lcm**2
+            weights[matchup_nodes[p][q], requested_match_nodes[(q, 2)]] = 0
+      # # Fill in a fixed rate for transitions between requested_match nodes.
+      # for ma in requested_match_nodes.values():
+      #   for mb in requested_match_nodes.values():
+      #     weights[ma, mb] = 2 * my_lcm**2
+      #     weights[mb, ma] = 2 * my_lcm**2
+
+      # Paths to and from the depot are FREE.
+      for node in requested_match_nodes.values():
+        weights[depot, node] = weights[node, depot] = 0
     except:
       import pdb
       pdb.post_mortem()
@@ -247,26 +250,29 @@ class Pairer(object):
     pairings = []
     # tour = elkai.solve_int_matrix(weights)
     print('NAME: Pairings')
-    print('TYPE: TSP')
+    print('TYPE: ACVRP')
     print(f'DIMENSION: {n}')
     print('EDGE_WEIGHT_TYPE: EXPLICIT')
-    print('EDGE_WEIGHT_FORMAT: UPPER_ROW')
+    print('EDGE_WEIGHT_FORMAT: FULL_MATRIX')
     print('EDGE_DATA_FORMAT: EDGE_LIST')
+    print('CAPACITY: 1')
+    print(f'VEHICLES: {len(requested_match_nodes)}')
+    print('DEPOT_SECTION')
+    print(f'{depot+1} -1')
     print('EDGE_DATA_SECTION')
     for i in range(n):
-      for j in range(i + 1, n):
-        if weights[i][j] != EFFECTIVE_INFINITY:
+      for j in range(n):
+        if i != j and weights[i][j] != EFFECTIVE_INFINITY:
           print(f'{i+1} {j+1} {weights[i, j]}')
     print('-1')
-    # print('EDGE_WEIGHT_SECTION')
-    # for i in range(n):
-    #   for j in range(i + 1, n):
-    #     if weights[i, j] == EFFECTIVE_INFINITY:
-    #       # We've already emitted the graph adjacency list omitting the
-    #       # infinities.
-    #       weights[i, j] = 0
-    #     print(f'{weights[i,j]:<6d}', end=' ')
-    #   print()
+    print('DEMAND_SECTION')
+    print(f'{depot+1} 0')
+    for c in requested_match_nodes.values():
+      print(f'{c+1} 1')
+    for p in matchup_nodes:
+      for d in matchup_nodes[p].values():
+        print(f'{d+1} 0')
+    print('EOF')
 
     reverse_nodes = {}
     for p in matchup_nodes:
@@ -318,10 +324,10 @@ def OrderPairingsByScore(pairings: Pairings) -> Pairings:
 
 
 def PairingTransitionCost(pairing_alpha, pairing_beta) -> float:
-  left_cost = 1 - difflib.SequenceMatcher(a=pairing_alpha[0],
-                                          b=pairing_beta[0]).ratio()
-  right_cost = 1 - difflib.SequenceMatcher(a=pairing_alpha[1],
-                                           b=pairing_beta[1]).ratio()
+  left_cost = 1 - difflib.SequenceMatcher(
+      a=pairing_alpha[0], b=pairing_beta[0]).ratio()
+  right_cost = 1 - difflib.SequenceMatcher(
+      a=pairing_alpha[1], b=pairing_beta[1]).ratio()
   return left_cost + right_cost
 
 
@@ -337,8 +343,8 @@ def Main(argv):
   pairings = pairer.MakePairings(random_pairings=cycle in (1,))
   pairings = OrderPairingsByTsp(pairings)
   PrintPairings(pairings)
-  ValidatePairings(pairings,
-                   n=pairer.correct_num_matches + bool(pairer.byed_player))
+  ValidatePairings(
+      pairings, n=pairer.correct_num_matches + bool(pairer.byed_player))
   t = time.time() - start
   try:
     os.mkdir('pairings')
