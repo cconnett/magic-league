@@ -1,6 +1,8 @@
 # python3
 """Solver for swiss pairings."""
 
+from __future__ import absolute_imports
+
 import collections
 import contextlib
 import difflib
@@ -13,14 +15,15 @@ import os
 import random
 import sys
 import time
-
 from typing import List, Optional, Tuple
+
 from absl import app
 from absl import flags
-
 import blitzstein_diaconis
 import elkai
 import numpy as np
+from ortools.constraint_solver import pywrapcp
+from ortools.constraint_solver import routing_enums_pb2
 import player as player_lib
 import sheet_manager
 
@@ -199,7 +202,8 @@ class Pairer(object):
     counter = itertools.count()
     requested_match_nodes = {}
     matchup_nodes = {}
-    drain_nodes = {}
+    depot = next(counter)
+
     for p in self.players:
       for z in range(p.requested_matches):
         requested_match_nodes[(p, z)] = next(counter)
@@ -246,36 +250,47 @@ class Pairer(object):
       raise
     pairings = []
     # tour = elkai.solve_int_matrix(weights)
-    print('NAME: Pairings')
-    print('TYPE: TSP')
-    print(f'DIMENSION: {n}')
-    print('EDGE_WEIGHT_TYPE: EXPLICIT')
-    print('EDGE_WEIGHT_FORMAT: UPPER_ROW')
-    print('EDGE_DATA_FORMAT: EDGE_LIST')
-    print('EDGE_DATA_SECTION')
-    for i in range(n):
-      for j in range(i + 1, n):
-        if weights[i][j] != EFFECTIVE_INFINITY:
-          print(f'{i+1} {j+1} {weights[i, j]}')
-    print('-1')
-    # print('EDGE_WEIGHT_SECTION')
-    # for i in range(n):
-    #   for j in range(i + 1, n):
-    #     if weights[i, j] == EFFECTIVE_INFINITY:
-    #       # We've already emitted the graph adjacency list omitting the
-    #       # infinities.
-    #       weights[i, j] = 0
-    #     print(f'{weights[i,j]:<6d}', end=' ')
-    #   print()
+    manager = pywrapcp.RoutingIndexManager(n, n // 2, depot)
+    routing = pywrapcp.RoutingModel(manager)
 
-    reverse_nodes = {}
-    for p in matchup_nodes:
-      for q in matchup_nodes[p]:
-        reverse_nodes[matchup_nodes[p][q]] = (p, q)
-    for a, b in zip(tour, tour[1:]):
-      if a in requested_match_nodes.values() and b in matchup_nodes.values():
-        pairings.append(reverse_nodes[a])
-    return pairings
+    def Distance(a, b):
+      return weights[a, b]
+
+    transit_callback_index = routing.RegisterTransitCallback(Distance)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    def Demand(a):
+      if a in requested_match_nodes.values():
+        return 1
+      return 0
+
+    demand_callback_index = routing.RegisterUnaryTransitCallback(Demand)
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index,
+        0,  # null capacity slack
+        [2] * (n // 2),
+        True,  # start cumul to zero
+        'Capacity')
+    for node in all_matchup_nodes:
+      routing.AddDisjunction([manager.NodeToIndex(node)], 20)
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+
+    # Solve the problem.
+    assignment = routing.SolveWithParameters(search_parameters)
+
+    # Print solution on console.
+    if assignment:
+
+      reverse_nodes = {}
+      for p in matchup_nodes:
+        for q in matchup_nodes[p]:
+          reverse_nodes[matchup_nodes[p][q]] = (p, q)
+      for a, b in zip(tour, tour[1:]):
+        if a in requested_match_nodes.values() and b in matchup_nodes.values():
+          pairings.append(reverse_nodes[a])
+      return pairings
 
 
 def OrderPairingsByTsp(pairings: Pairings) -> Pairings:
