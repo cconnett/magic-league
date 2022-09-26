@@ -22,16 +22,15 @@ pip install -r requirements.txt
 ### Create `credentials.json`
 
 To connect to a spreadsheet for automatic import and export, you'll need to
-create a Google Cloud service account and populate `credentials.json`.
+download a OAuth Client ID and populate `credentials.json`.
 
-1.  Create a service account.
-    https://developers.google.com/android/management/service-account
-1.  Select `Create credentials > Server account key`.
-1.  Select your service account and download a credentials file in JSON format.
-1.  Save that file in the project root directory as `credentials.json`.
-1.  Give the account write access to the league Sheet through Google Sheets's
-    sharing interface. Share with the email address found in `credentials.json`
-    under `client_email`.
+1.  Follow the "OAuth Client ID" instructions at
+    https://docs.gspread.org/en/v5.4.0/oauth2.html#authentication .
+1.  Move the downloaded credentials file to `[project root]/credentials.json`.
+
+When you run the script, a browser window will open to authorize the script to
+read and write to your spreadsheets. We apologize for the extreme access
+requested, but there does not seem to be a more suitable scope.
 
 ## Run
 
